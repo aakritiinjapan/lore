@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Lore — memory for your codebase</title>
+<style>
+  :root{
+    --bg:#0a0c10; --panel:#0f141b; --panel2:#141b24; --border:#222c39;
+    --text:#e6edf3; --muted:#8b94a3; --faint:#5c6675;
+    --accent:#7c83ff; --accent2:#3ad0c9;
+    --danger:#ff5c57; --danger-bg:#1d1012; --danger-bd:#5a2326;
+    --warn:#e3b341; --ok:#43c267; --ok-bg:#0f1a13; --ok-bd:#22432e;
+    --mono:ui-monospace,"Cascadia Code","JetBrains Mono","SF Mono",Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;font-size:15px;line-height:1.5}
+  body{background-image:radial-gradient(900px 500px at 80% -10%,rgba(124,131,255,.10),transparent 60%),
+       radial-gradient(700px 400px at 0% 0%,rgba(58,208,201,.07),transparent 55%);}
+  a{color:var(--accent2);text-decoration:none}
+  .mono{font-family:var(--mono)}
+
+  header{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;
+    padding:14px 26px;border-bottom:1px solid var(--border);
+    background:rgba(10,12,16,.82);backdrop-filter:blur(10px)}
+  .logo{display:flex;align-items:center;gap:11px;font-weight:700}
+  .logo .mark{width:30px;height:30px;border-radius:8px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    display:grid;place-items:center;color:#0a0c10;font-weight:900;font-size:17px;
+    box-shadow:0 0 18px rgba(124,131,255,.45)}
+  .logo .name{font-size:18px}
+  .tagline{color:var(--muted);font-size:13px;border-left:1px solid var(--border);padding-left:16px;max-width:480px}
+  .tagline b{color:var(--text);font-weight:600}
+  .spacer{flex:1}
+  .btn{font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;
+    border:1px solid var(--border);background:var(--panel2);color:var(--text);
+    padding:8px 14px;border-radius:8px;transition:.15s}
+  .btn:hover{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,131,255,.12)}
+  .btn.primary{background:linear-gradient(135deg,var(--accent),#5a62f0);border-color:transparent;color:#fff}
+  .btn.ghost{background:transparent}
+  .btn.sm{padding:6px 11px;font-size:12.5px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok);display:inline-block;margin-right:6px}
+
+  .wrap{max-width:1280px;margin:0 auto;padding:22px 26px}
+  .hero-line{font-size:14.5px;color:var(--muted);margin:2px 0 16px}
+  .hero-line b{color:var(--text)}
+
+  /* workspace bar */
+  .workspace{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:var(--panel);
+    border:1px solid var(--border);border-radius:12px;padding:12px 16px;margin-bottom:20px}
+  .ws-label{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:1px}
+  .ws-repo{font-family:var(--mono);font-size:14px;color:var(--accent2);font-weight:600}
+  .ws-sub{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+  .ws-pipe{color:var(--border)}
+  .connect{margin-top:14px;display:none;gap:8px;flex-wrap:wrap;align-items:center;width:100%}
+  .connect.open{display:flex}
+  .connect input{background:#070a0e;border:1px solid var(--border);border-radius:8px;padding:8px 11px;
+    color:var(--text);font-family:var(--mono);font-size:12.5px}
+  .connect input#c_repo{width:230px} .connect input#c_path{width:300px} .connect input#c_kw{width:200px}
+  .connect input:focus{outline:none;border-color:var(--accent)}
+  .hint{font-size:11.5px;color:var(--faint)}
+
+  .grid{display:grid;grid-template-columns:1.45fr 1fr;gap:20px;align-items:start}
+  @media(max-width:980px){.grid{grid-template-columns:1fr}}
+  .card{background:linear-gradient(180deg,var(--panel),#0c1118);border:1px solid var(--border);
+    border-radius:14px;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.25)}
+  .card h2{margin:0 0 3px;font-size:15px}
+  .card .sub{color:var(--muted);font-size:13px;margin:0 0 16px}
+  .card+.card{margin-top:20px}
+
+  /* mode tabs */
+  .modes{display:flex;gap:0;border:1px solid var(--border);border-radius:9px;overflow:hidden;width:max-content;margin-bottom:6px}
+  .modes button{background:var(--panel2);border:0;color:var(--muted);font-size:13px;padding:8px 16px;cursor:pointer;font-family:var(--sans)}
+  .modes button.on{background:var(--accent);color:#fff;font-weight:600}
+  .modepane{display:none;margin-top:14px} .modepane.on{display:block}
+
+  .refrow{display:flex;gap:8px}
+  .refrow input{flex:1;background:#070a0e;border:1px solid var(--border);border-radius:8px;padding:10px 13px;
+    color:var(--text);font-family:var(--mono);font-size:13.5px}
+  .refrow input:focus{outline:none;border-color:var(--accent2)}
+  textarea#diff{width:100%;height:220px;resize:vertical;background:#070a0e;color:#c9d4e3;
+    border:1px solid var(--border);border-radius:10px;padding:14px;font-family:var(--mono);font-size:12.7px;line-height:1.6}
+  textarea#diff:focus{outline:none;border-color:var(--accent)}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:11px;align-items:center}
+  .seg{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden}
+  .seg button{background:var(--panel2);border:0;color:var(--muted);font-size:12.5px;padding:7px 12px;cursor:pointer}
+  .seg button.on{background:var(--accent);color:#fff;font-weight:600}
+
+  /* fetched-diff viewer */
+  .diffview{background:#070a0e;border:1px solid var(--border);border-radius:10px;padding:10px 12px;
+    font-family:var(--mono);font-size:12.4px;line-height:1.55;max-height:260px;overflow:auto;margin-top:12px;white-space:pre}
+  .diffview .add{color:#7ee787}.diffview .del{color:#ff9a96}.diffview .hh{color:var(--accent2)}.diffview .ctx{color:#6b7585}
+
+  /* alert */
+  .alert{margin-top:16px;border-radius:12px;padding:18px;border:1px solid var(--danger-bd);
+    background:linear-gradient(180deg,var(--danger-bg),#120c0d);animation:rise .35s ease}
+  .alert.ok{border-color:var(--ok-bd);background:linear-gradient(180deg,var(--ok-bg),#0a120d)}
+  @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .alert .head{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700}
+  .alert.danger .head{color:var(--danger)} .alert.ok .head{color:var(--ok)}
+  .alert .label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;margin:14px 0 6px}
+  .commit{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;padding:7px 0}
+  .sha{font-family:var(--mono);font-size:12px;color:var(--accent2);background:#0c1118;border:1px solid var(--border);border-radius:6px;padding:2px 7px}
+  .date{color:var(--faint);font-size:12px;font-family:var(--mono)} .msg{font-size:13.5px}
+  .badge{font-family:var(--mono);font-size:11px;font-weight:600;color:#1a1206;background:var(--warn);border-radius:5px;padding:2px 7px}
+  .refine{color:var(--muted);font-size:13px;padding:3px 0 3px 14px;border-left:2px solid var(--border);margin-left:4px}
+  .codeblock{background:#070a0e;border:1px solid var(--danger-bd);border-radius:8px;padding:10px 12px;font-family:var(--mono);font-size:12.6px;margin-top:4px}
+  .codeblock div{color:#ff9a96;white-space:pre-wrap} .codeblock div::before{content:"- ";color:var(--danger);opacity:.7}
+  .pill{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.5px;border-radius:6px;padding:3px 9px;margin-top:4px}
+  .pill.HIGH{background:var(--danger);color:#fff} .pill.MEDIUM{background:var(--warn);color:#1a1206}
+  .risk{color:var(--muted);font-size:13px;margin-top:12px;border-top:1px dashed var(--border);padding-top:12px}
+  .explain .out{background:#0c1118;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:8px;padding:12px 14px;font-size:13.5px;color:#d7deea;margin-top:8px}
+  .viatag{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:1px;margin-top:7px} .viatag b{color:var(--accent)}
+
+  /* CI preview */
+  .ci{margin-top:16px;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#0c1118}
+  .ci .cih{display:flex;align-items:center;gap:9px;padding:11px 15px;border-bottom:1px solid var(--border);font-size:13px}
+  .ci .av{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;color:#0a0c10;font-weight:900;font-size:11px}
+  .ci .stat{margin-left:auto;font-weight:700;font-size:12px;padding:3px 10px;border-radius:999px}
+  .ci .stat.fail{background:var(--danger);color:#fff}.ci .stat.pass{background:var(--ok);color:#06210f}
+  .ci .body{padding:14px 15px;font-size:13px;color:#cdd6e2}
+  .ci .body code{font-family:var(--mono);background:#070a0e;border:1px solid var(--border);border-radius:5px;padding:1px 5px;font-size:12px}
+  .ci .ctxsub{font-size:11px;color:var(--faint);margin-top:9px}
+
+  /* ask + memory */
+  .askrow{display:flex;gap:8px}
+  .askrow input{flex:1;background:#070a0e;border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-size:13.5px}
+  .askrow input:focus{outline:none;border-color:var(--accent2)}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;margin-top:11px}
+  .chip{font-size:12px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:5px 11px;cursor:pointer;background:var(--panel)}
+  .chip:hover{border-color:var(--accent2);color:var(--text)}
+  .answer{margin-top:14px;background:#0c1118;border:1px solid var(--border);border-left:3px solid var(--accent2);border-radius:8px;padding:13px 15px;font-size:13.5px;color:#d7deea;display:none}
+  .stats{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+  .stat-tile{flex:1;min-width:80px;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:11px 13px}
+  .stat-tile .n{font-size:22px;font-weight:700;font-family:var(--mono)} .stat-tile .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px}
+  .timeline{position:relative;margin-left:6px;padding-left:18px;border-left:2px solid var(--border)}
+  .tl{position:relative;padding:9px 0}
+  .tl::before{content:"";position:absolute;left:-25px;top:14px;width:10px;height:10px;border-radius:50%;background:var(--panel);border:2px solid var(--faint)}
+  .tl.device::before{background:var(--accent);border-color:var(--accent);box-shadow:0 0 9px var(--accent)}
+  .tl .row{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap} .tl .m{font-size:13px}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--faint);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  footer{color:var(--faint);font-size:12px;text-align:center;padding:24px;border-top:1px solid var(--border);margin-top:24px}
+  footer .lc b{color:var(--accent2)}
+  .modal{position:fixed;inset:0;background:rgba(4,6,9,.78);backdrop-filter:blur(4px);z-index:50;display:none;align-items:center;justify-content:center;padding:30px}
+  .modal .box{width:100%;max-width:1100px;height:80vh;background:var(--panel);border:1px solid var(--border);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+  .modal .mh{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border)}
+  .modal iframe{flex:1;border:0;background:#0a0c10}
+  .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--accent);
+    border-radius:10px;padding:11px 18px;font-size:13px;box-shadow:0 8px 30px rgba(0,0,0,.4);display:none;z-index:60}
+
+  /* ---- custom Lore knowledge graph ---- */
+  .gtoggle button{font-size:12px;padding:6px 12px}
+  .gbody{flex:1;position:relative;overflow:hidden;background:radial-gradient(720px 440px at 64% 26%,rgba(124,131,255,.10),transparent 60%),#070a0e}
+  .loregraph{position:absolute;inset:0}
+  #graphframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#0a0c10}
+  .gedges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .gedges path{fill:none;stroke:#2b3850;stroke-width:1.8;stroke-linecap:round;
+    stroke-dasharray:var(--len);stroke-dashoffset:var(--len);animation:gdraw .85s ease forwards;animation-delay:var(--d,0s)}
+  .gedges path.spine{stroke:#6b6fe0;stroke-width:2.6}
+  .gedges path.danger{stroke:#ff5c57;stroke-width:2.8;filter:drop-shadow(0 0 6px rgba(255,92,87,.7))}
+  @keyframes gdraw{to{stroke-dashoffset:0}}
+  .gnode{position:absolute;text-align:center;opacity:0;transform:translate(-50%,-50%) scale(.6);
+    transition:opacity .45s ease,transform .45s ease}
+  .gnode.in{opacity:1;transform:translate(-50%,-50%) scale(1)}
+  .gnode .ball{width:26px;height:26px;border-radius:50%;margin:0 auto;background:#39435c;border:2px solid #4a5780}
+  .gnode.code .ball{width:36px;height:36px;background:linear-gradient(135deg,#3ad0c9,#2aa39c);border-color:#3ad0c9;box-shadow:0 0 18px rgba(58,208,201,.5)}
+  .gnode.device .ball{background:linear-gradient(135deg,#7c83ff,#5a62f0);border-color:#7c83ff;box-shadow:0 0 16px rgba(124,131,255,.6)}
+  .gnode.danger .ball{background:linear-gradient(135deg,#ff5c57,#c0392b);border-color:#ff5c57;animation:gpulse 1.1s ease-in-out infinite}
+  @keyframes gpulse{0%,100%{box-shadow:0 0 0 0 rgba(255,92,87,.55)}50%{box-shadow:0 0 0 14px rgba(255,92,87,0)}}
+  .gnode .lab{font-family:var(--mono);font-size:11px;color:var(--text);margin-top:8px;white-space:nowrap}
+  .gnode .above{position:absolute;bottom:44px;left:50%;transform:translateX(-50%);white-space:nowrap;line-height:1.5}
+  .gcap{position:absolute;left:18px;top:14px;font-size:12px;color:var(--muted)} .gcap b{color:var(--accent2);font-family:var(--mono)}
+  .gnode .above .sub{font-family:var(--mono);font-size:10px;color:var(--faint)}
+  .gnode .gbadge{display:inline-block;font-family:var(--mono);font-size:9.5px;color:#1a1206;background:#e3b341;border-radius:4px;padding:1px 5px;margin-top:2px}
+  .gnode .gtag{margin-top:6px;font-family:var(--mono);font-size:11px;color:#ff5c57;background:rgba(255,92,87,.12);border:1px solid #ff5c57;border-radius:7px;padding:2px 8px;display:inline-block}
+  .glegend{position:absolute;left:18px;bottom:16px;display:flex;gap:16px;font-size:11px;color:var(--muted)}
+  .glegend i{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px}
+  .grecall{position:absolute;right:20px;top:16px;font-family:var(--mono);font-size:12px;color:#fff;background:rgba(124,131,255,.16);
+    border:1px solid var(--accent);border-radius:8px;padding:5px 11px;opacity:0;transition:opacity .5s}
+  .grecall.show{opacity:1}
+  .gdot{position:absolute;width:12px;height:12px;border-radius:50%;background:#3ad0c9;box-shadow:0 0 16px #3ad0c9;
+    transform:translate(-50%,-50%);transition:left .78s ease,top .78s ease;z-index:6;opacity:0}
+  .gnode.recall .ball{animation:grecallpulse 1s ease}
+  .gnode.recall .lab{color:#7ee8e0}
+  @keyframes grecallpulse{0%{box-shadow:0 0 0 0 rgba(58,208,201,.65)}100%{box-shadow:0 0 0 18px rgba(58,208,201,0)}}
+  .ganswer{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);width:min(620px,86%);height:108px;overflow-y:auto;text-align:left;font-size:13px;line-height:1.55;
+    color:#d6f3ef;background:#0c1620;border:1px solid #3ad0c9;border-radius:10px;padding:12px 16px;opacity:0;transition:opacity .5s;z-index:6;box-shadow:0 10px 32px rgba(0,0,0,.65)}
+  .ganswer::before{content:"answer";display:block;font-family:var(--mono);font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#3ad0c9;margin-bottom:5px}
+  .ganswer::-webkit-scrollbar{width:7px} .ganswer::-webkit-scrollbar-thumb{background:#2b3850;border-radius:4px}
+  .ganswer.show{opacity:1}
+  .gnode.atrisk .ball{border-color:#e3b341;box-shadow:0 0 14px rgba(227,179,65,.55)}
+  .lcrow{display:flex;gap:8px;align-items:center;margin-top:14px;border-top:1px dashed var(--border);padding-top:12px}
+  .lcnote{font-size:12px;color:var(--ok)}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><div class="mark">L</div><div class="name">Lore</div></div>
+  <div class="tagline">It remembers <b>why</b> your code exists — and stops you from <b>undoing the reason</b>.</div>
+  <div class="spacer"></div>
+  <button class="btn ghost sm" id="rebuild"><span class="dot" id="statusdot"></span>Rebuild memory</button>
+</header>
+
+<div class="wrap">
+  <div class="hero-line">In real use Lore runs in <b>CI on every PR</b> (or a git hook / <code class="mono">lore scan</code>) and reads the diff itself — no pasting. This dashboard is the control room: connect repos, explore the memory, and try a change.</div>
+
+  <!-- WORKSPACE: which repo's memory is loaded -->
+  <div class="workspace">
+    <span class="ws-label">Connected repo</span>
+    <span class="ws-repo" id="ws_repo">—</span>
+    <span class="ws-pipe">│</span>
+    <span class="ws-sub" id="ws_sub">—</span>
+    <div class="spacer"></div>
+    <button class="btn sm ghost" id="toggleconnect">Connect a different repo ▾</button>
+    <div class="connect" id="connectform">
+      <input id="c_repo" placeholder="owner/repo  (e.g. pallets/werkzeug)" />
+      <input id="c_path" placeholder="file to scope  (e.g. src/werkzeug/security.py)" />
+      <input id="c_kw" placeholder="keyword filter (optional)" />
+      <button class="btn primary sm" id="connectbtn">Connect &amp; build memory</button>
+      <span class="hint">One-time setup: Lore ingests that file's history into the graph.</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT: the catch -->
+    <div>
+      <div class="card">
+        <h2>Check a change for regressions</h2>
+        <p class="sub">Lore flags a change that removes a guard a past decision deliberately introduced.</p>
+
+        <div class="modes">
+          <button id="m_ref" class="on">Check a PR / commit #</button>
+          <button id="m_paste">Try a change</button>
+        </div>
+
+        <div class="modepane on" id="pane_ref">
+          <div class="refrow">
+            <input id="ref" placeholder="PR number or commit SHA  (e.g. #3020 or 9bdec46f)" />
+            <button class="btn primary" id="checkbtn">Check</button>
+          </div>
+          <p class="hint" style="margin:9px 0 0">Lore fetches the diff from the connected repo — no pasting. Real fix commits show clean; this is how the CI check works.</p>
+        </div>
+
+        <div class="modepane" id="pane_paste">
+          <div class="toolbar">
+            <button class="btn primary" id="scanbtn">▶ Scan</button>
+            <div class="seg"><button id="loadbad" class="on">Demo: bad PR</button><button id="loadsafe">Safe change</button></div>
+            <button class="btn ghost sm" id="clearbtn">Clear</button>
+          </div>
+          <textarea id="diff" spellcheck="false"></textarea>
+        </div>
+
+        <div id="result"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div>
+      <div class="card">
+        <h2>Ask Lore</h2>
+        <p class="sub">Why does this code exist? Answered across the repo's history.</p>
+        <div class="askrow"><input id="q" placeholder="Why does safe_join block Windows device names?" /><button class="btn primary" id="askbtn">Ask</button></div>
+        <div class="chips" id="chips"></div>
+        <div class="answer" id="answer"></div>
+      </div>
+      <div class="card">
+        <h2>The memory</h2>
+        <p class="sub" id="memsub">decision history</p>
+        <div class="stats" id="stats"></div>
+        <div class="timeline" id="timeline"></div>
+        <button class="btn ghost sm" id="opengraph" style="margin-top:14px">◇ Open knowledge graph</button>
+        <button class="btn ghost sm" id="forgetbtn" style="margin-top:14px;margin-left:6px">⌫ Forget superseded</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer><span class="lc">Self-hosted <b>Cognee</b> · remember → recall → improve → forget</span><br/>Lore — codebase historian · hackathon build</footer>
+
+<div class="modal" id="modal"><div class="box">
+  <div class="mh">
+    <div style="display:flex;align-items:center;gap:12px"><b>Knowledge graph</b>
+      <div class="seg gtoggle"><button id="g_lore" class="on">Lore graph</button><button id="g_raw">Raw (Cognee)</button></div></div>
+    <div style="display:flex;gap:8px"><button class="btn ghost sm" id="replaybtn">↻ Replay</button><button class="btn ghost sm" id="closemodal">✕ Close</button></div>
+  </div>
+  <div class="gbody"><div class="loregraph" id="loregraph"></div><iframe id="graphframe" src="" style="display:none"></iframe></div>
+</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>(s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// Environment-aware transport: message-passing inside a VS Code webview, fetch in the browser.
+const __VSC=(typeof acquireVsCodeApi!=="undefined")?acquireVsCodeApi():null;
+let __seq=0; const __pending={};
+if(__VSC){window.addEventListener("message",(e)=>{const m=e.data; if(m&&m.type==="apiResult"&&__pending[m.id]){__pending[m.id](m);delete __pending[m.id];}});}
+function __rpc(method,path,body){return new Promise((resolve,reject)=>{const id=++__seq;__pending[id]=(m)=>{m.ok?resolve(m.data):reject(new Error(m.error||"error"));};__VSC.postMessage({type:"api",id,method,path,body});});}
+async function post(u,b){if(__VSC)return __rpc("POST",u,b);const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)});return r.json();}
+async function get(u){if(__VSC)return __rpc("GET",u);const r=await fetch(u);return r.json();}
+function toast(m){const t=$("#toast");t.textContent=m;t.style.display="block";setTimeout(()=>t.style.display="none",3200);}
+function badges(g){return (g||[]).map(x=>`<span class="badge">GHSA-${esc(x)}</span>`).join(" ");}
+
+function renderDiff(text){
+  const lines=(text||"").split("\n").slice(0,300).map(l=>{
+    let c="ctx"; if(l.startsWith("+")&&!l.startsWith("+++"))c="add";
+    else if(l.startsWith("-")&&!l.startsWith("---"))c="del";
+    else if(l.startsWith("@@"))c="hh";
+    return `<span class="${c}">${esc(l)}</span>`;
+  }).join("\n");
+  return `<div class="diffview">${lines}</div>`;
+}
+
+function renderCI(d){
+  if(!d.regression){
+    return `<div class="ci"><div class="cih"><span class="av">L</span><b>Lore</b> / regression-check
+      <span class="stat pass">✓ Passed</span></div>
+      <div class="body">No past decision is reverted by this change. Safe to merge.<div class="ctxsub">This is the status check Lore posts on every PR.</div></div></div>`;
+  }
+  const o=d.origin;
+  return `<div class="ci"><div class="cih"><span class="av">L</span><b>Lore</b> / regression-check
+    <span class="stat fail">✗ Failed</span></div>
+    <div class="body">⚠️ This change removes a guard introduced by <code>${esc(o.sha)}</code> (${esc(o.date)}) ${badges(o.ghsa)} —
+    “${esc(o.message)}”. Merging likely re-opens the class of bug that fix closed. Please justify or revert.
+    <div class="ctxsub">This is the status check Lore posts on every PR — the diff is read automatically, no pasting.</div></div></div>`;
+}
+
+function renderScan(d){
+  window.LASTSCAN=d;
+  const el=$("#result");
+  let html = (d.diff!==undefined ? renderDiff(d.diff) : "");
+  if(!d.regression){
+    html+=`<div class="alert ok"><div class="head">✓ No regression detected</div>
+      <div class="risk" style="border:0;padding-top:8px">This change doesn't remove any guard line a past decision introduced.</div></div>`;
+    el.innerHTML=html+renderCI(d); return;
+  }
+  const o=d.origin;
+  const refines=(d.refinements||[]).map(r=>`<div class="refine"><span class="sha">${esc(r.sha)}</span> <span class="date">${esc(r.date)}</span> ${esc(r.message)} ${badges(r.ghsa)}</div>`).join("");
+  const code=(d.removed||[]).map(l=>`<div>${esc(l)}</div>`).join("");
+  html+=`<div class="alert danger">
+    <div class="head">⚠ Regression risk in <span class="mono" style="font-size:14px">${esc(d.filename)}</span></div>
+    <div class="label">Guard originally introduced by</div>
+    <div class="commit"><span class="sha">${esc(o.sha)}</span><span class="date">${esc(o.date)}</span><span class="msg">${esc(o.message)}</span> ${badges(o.ghsa)}</div>
+    ${refines?`<div class="label">Later hardened by</div>${refines}`:""}
+    <div class="label">Guard logic this change removes</div><div class="codeblock">${code}</div>
+    <div><span class="pill ${d.confidence}">${d.confidence} CONFIDENCE</span></div>
+    <div class="risk">Re-opens the path-traversal / Windows device-name class these fixes closed.</div>
+    <div class="explain"><button class="btn sm" id="explainbtn">Why does this matter? — ask Cognee</button>
+      <div class="out" id="explainout" style="display:none"></div>
+      <div class="viatag" id="explainvia" style="display:none">grounded over the <b>Cognee</b> graph · GRAPH_COMPLETION</div></div>
+    <div class="lcrow"><button class="btn sm" id="confirmbtn">✓ Confirm — remember</button><button class="btn ghost sm" id="dismissbtn">✕ Dismiss</button><span class="lcnote" id="lcnote"></span></div></div>`;
+  el.innerHTML=html+renderCI(d);
+  $("#explainbtn").onclick=async()=>{
+    $("#explainout").style.display="block";$("#explainout").innerHTML='<span class="spin"></span> reasoning over the graph…';
+    const diffText = d.diff!==undefined ? d.diff : $("#diff").value;
+    const r=await post("/api/explain",{diff:diffText});
+    $("#explainout").textContent=r.explanation||"(no explanation)"; $("#explainvia").style.display="block";
+  };
+  $("#confirmbtn").onclick=async()=>{const r=await post("/api/confirm",{sha:d.origin.sha});$("#lcnote").textContent=r.ok?"✓ remembered — marked at risk in the graph (improve)":"error";toast("Confirmed — memory updated");loadMemory();};
+  $("#dismissbtn").onclick=async()=>{await post("/api/dismiss",{sha:d.origin.sha});$("#lcnote").textContent="dismissed — reverted to active";toast("Dismissed");loadMemory();};
+}
+
+async function scanPaste(){
+  $("#result").innerHTML='<div style="color:var(--muted);margin-top:14px"><span class="spin"></span> scanning…</div>';
+  renderScan(await post("/api/scan",{diff:$("#diff").value}));
+}
+async function checkRef(){
+  const ref=$("#ref").value.trim(); if(!ref)return;
+  $("#result").innerHTML='<div style="color:var(--muted);margin-top:14px"><span class="spin"></span> fetching diff from GitHub…</div>';
+  const d=await post("/api/check_ref",{ref});
+  if(!d.found){$("#result").innerHTML=`<div class="alert ok"><div class="head">Not found</div><div class="risk" style="border:0;padding-top:8px">No PR/commit <code>${esc(ref)}</code> in ${esc(d.repo||"")} (or rate-limited).</div></div>`;return;}
+  renderScan(d);
+}
+async function loadSample(kind){
+  const d=await get("/api/sample/"+kind);$("#diff").value=d.diff;$("#result").innerHTML="";
+  $("#loadbad").classList.toggle("on",kind==="bad");$("#loadsafe").classList.toggle("on",kind==="safe");
+}
+async function ask(q){
+  if(q)$("#q").value=q; const query=$("#q").value.trim(); if(!query)return;
+  $("#answer").style.display="block";$("#answer").innerHTML='<span class="spin"></span> recalling across history…';
+  const answer=(await post("/api/ask",{query})).answer;
+  $("#answer").textContent=answer;
+  window.RECALL={targets:relevantTargets(answer), answer:answer};  // full text; box grows/scrolls to fit
+  openGraph();  // open the graph and trace the recall to the answer nodes
+}
+async function loadMemory(){
+  const m=await get("/api/memory"); window.MEM=m;
+  $("#ws_repo").textContent=m.repo; $("#ws_sub").textContent=m.subsystem;
+  $("#memsub").textContent=`${m.subsystem} — decision history`;
+  $("#stats").innerHTML=`
+    <div class="stat-tile"><div class="n">${m.commits}</div><div class="k">Decisions</div></div>
+    <div class="stat-tile"><div class="n">${m.advisories.length}</div><div class="k">Advisories</div></div>
+    <div class="stat-tile"><div class="n">${m.timeline.filter(t=>t.device).length}</div><div class="k">Guard chain</div></div>`;
+  $("#timeline").innerHTML=m.timeline.map(t=>`<div class="tl ${t.device?'device':''}">
+     <div class="row"><span class="sha">${esc(t.sha)}</span><span class="date">${esc(t.date)}</span> ${badges(t.ghsa)} ${t.at_risk?'<span class="badge" style="background:var(--danger);color:#fff">at risk</span>':''}</div>
+     <div class="m">${esc(t.message)}</div></div>`).join("");
+}
+
+// mode tabs
+function setMode(m){
+  $("#m_ref").classList.toggle("on",m==="ref");$("#m_paste").classList.toggle("on",m==="paste");
+  $("#pane_ref").classList.toggle("on",m==="ref");$("#pane_paste").classList.toggle("on",m==="paste");
+  $("#result").innerHTML="";
+}
+$("#m_ref").onclick=()=>setMode("ref"); $("#m_paste").onclick=()=>{setMode("paste");if(!$("#diff").value)loadSample("bad");};
+$("#checkbtn").onclick=checkRef; $("#ref").addEventListener("keydown",e=>{if(e.key==="Enter")checkRef();});
+$("#scanbtn").onclick=scanPaste; $("#loadbad").onclick=()=>loadSample("bad"); $("#loadsafe").onclick=()=>loadSample("safe");
+$("#clearbtn").onclick=()=>{$("#diff").value="";$("#result").innerHTML="";};
+$("#askbtn").onclick=()=>ask(); $("#q").addEventListener("keydown",e=>{if(e.key==="Enter")ask();});
+// ---- custom animated knowledge graph ----
+window.MEM=null; window.LASTSCAN=null;
+function gtrunc(s,n){s=s||"";return s.length>n?s.slice(0,n-1)+"…":s;}
+function gNode(o){
+  const el=document.createElement('div'); el.className='gnode '+(o.cls||'');
+  el.style.left=o.x+'px'; el.style.top=o.y+'px';
+  el.innerHTML=`<div class="above">${o.above||''}</div><div class="ball"></div>`+
+    (o.lab?`<div class="lab">${o.lab}</div>`:'')+(o.tag?`<div class="gtag">${o.tag}</div>`:'');
+  return el;
+}
+function renderLoreGraph(opts){
+  opts=opts||{}; const highlightSha=opts.highlightSha;
+  const m=window.MEM, host=$("#loregraph"); if(!m||!host)return; host.innerHTML="";
+  const gen=(window.GGEN=(window.GGEN||0)+1);  // cancels any in-flight recall animation
+  const W=host.clientWidth||940, H=host.clientHeight||520;
+  const decs=[...m.timeline].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  const n=decs.length, padX=Math.max(90,W*0.11), rowY=H-235, code={x:W/2,y:92};  // rowY raised to reserve a clear bottom band for the answer
+  const pos=decs.map((d,i)=>({d,x:padX+(n>1?i*(W-2*padX)/(n-1):0),y:rowY}));
+  const G={code:code, nodes:{}}; window.GPOS=G;
+  const edges=[];
+  pos.forEach((p,i)=>edges.push({x1:p.x,y1:p.y,x2:code.x,y2:code.y,cls:(highlightSha&&p.d.sha===highlightSha)?'danger':'',d:0.3+i*0.1}));
+  for(let i=1;i<pos.length;i++) if(pos[i].d.device&&pos[i-1].d.device) edges.push({x1:pos[i-1].x,y1:pos[i-1].y,x2:pos[i].x,y2:pos[i].y,cls:'spine',d:0.6+i*0.1});
+  const NS="http://www.w3.org/2000/svg", svg=document.createElementNS(NS,"svg");
+  svg.setAttribute("class","gedges"); svg.setAttribute("viewBox",`0 0 ${W} ${H}`); svg.setAttribute("preserveAspectRatio","none");
+  svg.innerHTML=edges.map(e=>{const len=Math.hypot(e.x2-e.x1,e.y2-e.y1);return `<path class="${e.cls||''}" d="M${e.x1} ${e.y1} L${e.x2} ${e.y2}" style="--len:${len};--d:${e.d}s"></path>`;}).join("");
+  host.appendChild(svg);
+  host.appendChild(gNode({x:code.x,y:code.y,cls:'code',lab:m.subsystem.split('/').pop(),above:'<div class="sub">the file</div>'}));
+  pos.forEach((p)=>{const d=p.d, danger=highlightSha&&d.sha===highlightSha;
+    const el=gNode({x:p.x,y:p.y,cls:'dec '+(d.device?'device ':'')+(danger?'danger':'')+(d.at_risk?'atrisk ':''),
+      above:`<div class="sub">${d.sha} · ${d.date}</div>`+(d.ghsa&&d.ghsa.length?`<div class="gbadge">GHSA-${d.ghsa[0]}</div>`:''),
+      lab:gtrunc(d.message,24), tag:danger?'⚠ regresses':(d.at_risk?'⚠ at risk':'')});
+    host.appendChild(el); G.nodes[d.sha]={x:p.x,y:p.y,el};});
+  const chip = highlightSha?'lore.regresses()':'lore.recall()';
+  host.insertAdjacentHTML('beforeend',`<div class="gcap"><b>${m.subsystem.split('/').pop()}</b> — decision history · oldest → newest</div>
+     <div class="glegend">
+     <span><i style="background:#3ad0c9"></i>file</span>
+     <span><i style="background:#7c83ff"></i>guard decision</span>
+     <span><i style="background:#39435c;border:1px solid #4a5780"></i>other</span>
+     ${highlightSha?'<span><i style="background:#ff5c57"></i>regressed</span>':''}</div>
+     <div class="grecall">${chip}</div>`);
+  const nodes=host.querySelectorAll('.gnode'); nodes.forEach((el,i)=>setTimeout(()=>el.classList.add('in'),120+i*110));
+  const after=120+nodes.length*110+150;
+  setTimeout(()=>{const c=host.querySelector('.grecall'); if(c)c.classList.add('show');},after);
+  if(opts.recall) setTimeout(()=>{ if(window.GGEN===gen) animateRecall(opts.recall.targets, opts.recall.answer, gen); }, after+120);
+}
+function animateRecall(targets, answer, gen){
+  const host=$("#loregraph"), G=window.GPOS; if(!G||!host)return;
+  host.querySelectorAll('.ganswer,.gdot').forEach(e=>e.remove());  // clear any stale chip/dot
+  const dot=document.createElement('div'); dot.className='gdot';
+  dot.style.left=G.code.x+'px'; dot.style.top=G.code.y+'px'; host.appendChild(dot);
+  const ans=document.createElement('div'); ans.className='ganswer'; ans.textContent=answer||''; host.appendChild(ans);
+  const seq=(targets||[]).map(s=>G.nodes[s]).filter(Boolean);
+  let i=0;
+  setTimeout(()=>{ if(window.GGEN!==gen)return; dot.style.opacity='1'; step();},150);
+  function step(){
+    if(window.GGEN!==gen)return;  // a newer render superseded this animation
+    if(i>=seq.length){ setTimeout(()=>{dot.style.opacity='0'; ans.classList.add('show');},350); return; }
+    const node=seq[i++];
+    dot.style.left=node.x+'px'; dot.style.top=node.y+'px';
+    setTimeout(()=>{ if(window.GGEN!==gen)return; if(node.el)node.el.classList.add('recall'); step(); },800);
+  }
+}
+function relevantTargets(answer){
+  const m=window.MEM; if(!m)return [];
+  const a=(answer||"").toLowerCase();
+  let t=m.timeline.filter(d=>a.includes((d.sha||"").toLowerCase()));
+  if(!t.length) t=m.timeline.filter(d=>d.device&&(a.includes("device")||a.includes("safe_join")||a.includes("multi-segment")||a.includes("compound")||a.includes("traversal")));
+  if(!t.length) t=m.timeline.filter(d=>d.device);
+  if(!t.length) t=m.timeline;
+  return [...t].sort((x,y)=>(x.date||"").localeCompare(y.date||"")).map(d=>d.sha);
+}
+function openGraph(){$("#modal").style.display="flex"; showLore();}
+function showLore(){$("#g_lore").classList.add("on");$("#g_raw").classList.remove("on");$("#loregraph").style.display="block";$("#graphframe").style.display="none";
+  if(window.RECALL){const r=window.RECALL; window.RECALL=null; renderLoreGraph({recall:r});}
+  else renderLoreGraph({highlightSha:(window.LASTSCAN&&window.LASTSCAN.regression)?window.LASTSCAN.origin.sha:null});}
+function showRaw(){$("#g_raw").classList.add("on");$("#g_lore").classList.remove("on");$("#loregraph").style.display="none";$("#graphframe").style.display="block"; if(!$("#graphframe").getAttribute("src"))$("#graphframe").src="/graph.html";}
+$("#opengraph").onclick=openGraph; $("#g_lore").onclick=showLore; $("#g_raw").onclick=showRaw;
+$("#forgetbtn").onclick=async()=>{const r=await post("/api/forget",{});toast(r.ok?`Forgot ${(r.forgotten||[]).length} superseded guard(s) — pruned from graph`:("error: "+(r.error||"")));await loadMemory();};
+$("#replaybtn").onclick=showLore; $("#closemodal").onclick=()=>{$("#modal").style.display="none";};
+
+// connect
+$("#toggleconnect").onclick=()=>$("#connectform").classList.toggle("open");
+$("#connectbtn").onclick=async()=>{
+  const repo=$("#c_repo").value.trim(), path=$("#c_path").value.trim();
+  if(!repo||!path){toast("Enter owner/repo and a file path");return;}
+  $("#connectbtn").innerHTML='<span class="spin"></span> ingesting…';
+  const r=await post("/api/connect",{repo,path,keyword:$("#c_kw").value.trim()||null});
+  $("#connectbtn").textContent="Connect & build memory";
+  if(r.ok){toast(`Connected ${r.repo} · ${r.decisions} decisions`);$("#connectform").classList.remove("open");await loadMemory();$("#result").innerHTML="";}
+  else toast("Connect failed: "+(r.error||"unknown"));
+};
+$("#rebuild").onclick=async()=>{
+  $("#rebuild").innerHTML='<span class="spin"></span> rebuilding…';
+  await post("/api/build",{}); $("#rebuild").innerHTML='<span class="dot"></span>Rebuild memory'; await loadMemory(); toast("Memory rebuilt");
+};
+
+const CHIPS=["Why does safe_join block Windows device names, and how has it evolved?",
+  "What is the most recent decision on this file and what superseded it?"];
+$("#chips").innerHTML=CHIPS.map(c=>`<span class="chip">${esc(c)}</span>`).join("");
+document.querySelectorAll(".chip").forEach((el,i)=>el.onclick=()=>{$("#q").value=CHIPS[i];$("#q").focus();});
+
+loadMemory();
+if(__VSC){const r=document.getElementById("g_raw"); if(r)r.style.display="none";}  // Raw-iframe can't load in the webview
+</script>
+</body>
+</html>
