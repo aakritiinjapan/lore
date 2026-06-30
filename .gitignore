@@ -1,0 +1,31 @@
+# secrets
+.env
+
+# generated outputs
+graph.html
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# cognee / kuzu databases
+.cognee_system/
+cognee_db/
+*.lancedb/
+lancedb/
+*.db
+*.db-shm
+*.db-wal
+
+# github api cache (local dev speed-up, not needed by others)
+data/cache/
+
+# vscode
+.vscode/settings.json
+
