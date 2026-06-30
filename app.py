@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 
 from build_graph import load_slice, first_line
-from regress import build_decisions, detect, removed_for_subsystem, explain_with_cognee
+from regress import build_decisions, detect, removed_for_subsystem, explain_with_cognee, is_strong, is_meaningful
 from ingest_github import fetch_slice, save_slice, fetch_ref_diff
 from cognee import search, SearchType
 from cognee.tasks.storage import add_data_points
@@ -54,6 +54,11 @@ class ConnectReq(BaseModel):
 
 class CheckRefReq(BaseModel):
     ref: str
+
+
+class InspectReq(BaseModel):
+    path: str = ""
+    content: str
 
 
 class ConfirmReq(BaseModel):
@@ -164,6 +169,47 @@ async def api_sample(kind: str):
 @app.post("/api/scan")
 async def api_scan(req: ScanReq):
     return scan(req.diff)
+
+
+@app.post("/api/inspect")
+async def api_inspect(req: InspectReq):
+    """Content-based inspection for the editor (no diff, no git).
+
+    Given a file's current text, report which past Decisions' guard lines are
+    *present* in it and where (so the extension can anchor CodeLens + hover on
+    the lines that years of fixes deliberately added). Pure-python, instant.
+    """
+    slice_ = load_slice()
+    subsystem = slice_["subsystem_path"]
+    # Collect only real CODE lines present in the file: skip comments and docstring
+    # prose so we never flag a doc line as a "guard" (deleting prose reverts nothing).
+    present = set()
+    in_doc, delim = False, ""
+    for raw in (req.content or "").splitlines():
+        s = raw.strip()
+        if in_doc:
+            if delim in s:
+                in_doc = False
+            continue
+        if s.startswith('"""') or s.startswith("'''"):
+            d = s[:3]
+            if d not in s[3:]:  # docstring not closed on the same line
+                in_doc, delim = True, d
+            continue
+        if is_meaningful(s):
+            present.add(s)
+    guards = []
+    for d in build_decisions(slice_):
+        lines = [l for l in d["introduced"] if is_strong(l) and l in present]
+        if lines:
+            guards.append({"sha": d["sha"], "date": d["date"], "message": d["message"],
+                           "ghsa": d["ghsa"], "lines": lines})
+    guards.sort(key=lambda g: g["date"])
+    p = (req.path or "").replace("\\", "/")
+    leaf = subsystem.rsplit("/", 1)[-1]
+    path_match = bool(p) and (p == subsystem or p.endswith("/" + subsystem) or p.endswith(subsystem) or p.endswith("/" + leaf))
+    return {"subsystem": subsystem, "repo": slice_["repo"],
+            "is_subsystem": bool(guards) or path_match, "guards": guards}
 
 
 @app.post("/api/check_ref")

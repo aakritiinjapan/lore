@@ -1,0 +1,56 @@
+{
+  "name": "lore-vscode",
+  "displayName": "Lore",
+  "description": "Codebase memory in your editor — catches changes that revert a past decision, and tells you why code exists.",
+  "version": "0.1.0",
+  "publisher": "lore",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Linters", "Machine Learning", "Other"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "lore.graph", "title": "Knowledge Graph", "category": "Lore" },
+      { "command": "lore.scanFile", "title": "Scan Current File for Regressions", "category": "Lore" },
+      { "command": "lore.restoreAll", "title": "Restore All Guards in This File", "category": "Lore" },
+      { "command": "lore.ask", "title": "Ask…", "category": "Lore" },
+      { "command": "lore.why", "title": "Explain This Guard", "category": "Lore" }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "lore", "title": "Lore", "icon": "media/lore.svg" }
+      ]
+    },
+    "views": {
+      "lore": [
+        { "id": "lore.sidebar", "name": "Lore", "type": "webview" }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        { "command": "lore.scanFile", "when": "editorTextFocus", "group": "lore@1" },
+        { "command": "lore.restoreAll", "when": "editorTextFocus", "group": "lore@2" },
+        { "command": "lore.ask", "when": "editorTextFocus", "group": "lore@3" }
+      ],
+      "commandPalette": [
+        { "command": "lore.why", "when": "false" }
+      ]
+    },
+    "configuration": {
+      "title": "Lore",
+      "properties": {
+        "lore.serviceUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765",
+          "description": "Base URL of the running Lore service."
+        },
+        "lore.regressionSeverity": {
+          "type": "string",
+          "enum": ["Error", "Warning", "Information"],
+          "default": "Error",
+          "description": "Severity used for inline regression diagnostics."
+        }
+      }
+    }
+  }
+}
