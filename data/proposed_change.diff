@@ -1,0 +1,14 @@
+diff --git a/src/werkzeug/security.py b/src/werkzeug/security.py
+--- a/src/werkzeug/security.py
++++ b/src/werkzeug/security.py
+@@ -168,11 +168,6 @@ def safe_join(directory: str, *untrusted: str) -> str | None:
+
+         if (
+             any(sep in filename for sep in _os_alt_seps)
+-            or (
+-                os.name == "nt"
+-                and filename.partition(".")[0].strip().upper() in _windows_device_files
+-            )
+             or os.path.isabs(filename)
+             or filename == ".."
+             or filename.startswith("../")
