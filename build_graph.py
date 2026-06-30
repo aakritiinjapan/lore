@@ -7,6 +7,7 @@ add_data_points -> (optional) search(GRAPH_COMPLETION).
 import asyncio
 import json
 import os
+from typing import Optional
 
 import cognee
 from cognee.low_level import setup
@@ -27,16 +28,49 @@ def first_line(msg: str) -> str:
     return (msg or "").splitlines()[0].strip() if msg else ""
 
 
+def _norm_path(p: str) -> str:
+    return (p or "").replace("\\", "/").strip()
+
+
+def tracked_paths(slice_: dict) -> list:
+    """The files Lore watches in this slice. Falls back to the single subsystem
+    path for older slices, so existing data keeps working."""
+    tp = slice_.get("tracked_paths")
+    if tp:
+        return list(tp)
+    sp = slice_.get("subsystem_path")
+    return [sp] if sp else []
+
+
+def match_tracked(filename: str, paths) -> Optional[str]:
+    """Return the tracked path a diff/commit `filename` corresponds to (or None).
+    Tolerant of leading a//b/ and repo-relative vs. workspace-relative forms."""
+    fn = _norm_path(filename)
+    if not fn:
+        return None
+    for p in paths:
+        pp = _norm_path(p)
+        if not pp:
+            continue
+        if fn == pp or fn.endswith("/" + pp) or pp.endswith("/" + fn) or fn.endswith(pp) or pp.endswith(fn):
+            return p
+    return None
+
+
 def build_nodes(slice_: dict):
     """Turn the cached commit slice into typed DataPoints with edges.
 
-    Returns (nodes, code_unit, decisions_in_order).
+    Multi-file aware: one CodeUnit per tracked path; each commit/decision links to
+    the (primary) tracked file it touches.
+
+    Returns (nodes, code_units_by_path, decisions_in_order).
     """
+    paths = tracked_paths(slice_)
     commits_raw = sorted(slice_["commits"], key=lambda c: c.get("date") or "")
-    code_unit = CodeUnit(path=slice_["subsystem_path"], kind="file", id=CodeUnit.id_for(slice_["subsystem_path"]))
+    code_units = {p: CodeUnit(path=p, kind="file", id=CodeUnit.id_for(p)) for p in paths}
 
     authors: dict[str, Author] = {}
-    nodes = [code_unit]
+    nodes = list(code_units.values())
     decisions_in_order = []
 
     for c in commits_raw:
@@ -45,19 +79,23 @@ def build_nodes(slice_: dict):
             authors[name] = Author(name=name, github_handle=c.get("login"), id=Author.id_for(name))
             nodes.append(authors[name])
 
+        touched = [p for p in paths if any(match_tracked(f.get("filename"), [p]) for f in c.get("files", []))]
+        primary = code_units[touched[0]] if touched else (next(iter(code_units.values()), None))
+        topic = (touched[0].rsplit("/", 1)[-1] + " history") if touched else "repo history"
+
         commit = Commit(
             sha=c["short_sha"],
             message=first_line(c["message"]),
             committed_on=(c.get("date") or "")[:10],
             author=authors[name],
-            touches=code_unit,
+            touches=primary,
             id=Commit.id_for(c["short_sha"]),
         )
         decision = Decision(
             text=first_line(c["message"]),
             rationale=c["message"].strip(),
-            topic="safe_join path-traversal protection",
-            concerns=code_unit,
+            topic=topic,
+            concerns=primary,
             made_in=commit,
             decided_on=(c.get("date") or "")[:10],
             status="active",
@@ -66,19 +104,20 @@ def build_nodes(slice_: dict):
         nodes.extend([commit, decision])
         decisions_in_order.append(decision)
 
-    # Evolution thread: later device-name fixes supersede the earlier ones.
+    # Evolution thread: later device-name fixes supersede the earlier ones (kept as a
+    # light heuristic; harmless when no such decisions exist).
     device = [d for d in decisions_in_order if "device name" in d.text.lower()]
     for newer, older in zip(device[1:], device):
         newer.supersedes = older
         older.status = "superseded"
 
-    return nodes, code_unit, decisions_in_order
+    return nodes, code_units, decisions_in_order
 
 
 async def ingest(prune: bool = True):
     """Build + persist the graph. Returns the built objects."""
     slice_ = load_slice()
-    nodes, code_unit, decisions = build_nodes(slice_)
+    nodes, code_units, decisions = build_nodes(slice_)
 
     await setup()
     if prune:
@@ -87,7 +126,8 @@ async def ingest(prune: bool = True):
         await setup()
 
     await add_data_points(nodes)
-    return {"nodes": nodes, "code_unit": code_unit, "decisions": decisions, "slice": slice_}
+    return {"nodes": nodes, "code_units": code_units,
+            "code_unit": next(iter(code_units.values()), None), "decisions": decisions, "slice": slice_}
 
 
 async def main():

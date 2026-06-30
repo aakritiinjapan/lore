@@ -19,9 +19,9 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
 
-from build_graph import load_slice, first_line
-from regress import build_decisions, detect, removed_for_subsystem, explain_with_cognee, is_strong, is_meaningful
-from ingest_github import fetch_slice, save_slice, fetch_ref_diff
+from build_graph import load_slice, first_line, tracked_paths, match_tracked
+from regress import build_decisions, detect, removed_by_file, explain_with_cognee, is_strong, is_meaningful
+from ingest_github import fetch_slice, fetch_multi_slice, save_slice, fetch_ref_diff
 from cognee import search, SearchType
 from cognee.tasks.storage import add_data_points
 from cognee.infrastructure.databases.graph import get_graph_engine
@@ -48,7 +48,8 @@ class AskReq(BaseModel):
 
 class ConnectReq(BaseModel):
     repo: str
-    path: str
+    path: Optional[str] = None          # single file (back-compat)
+    paths: Optional[list] = None        # multiple files to track
     keyword: Optional[str] = None
 
 
@@ -90,27 +91,42 @@ def _dec(d):
     return {"sha": d["sha"], "date": d["date"], "message": d["message"], "ghsa": d["ghsa"]}
 
 
-def scan(diff_text: str) -> dict:
-    slice_ = load_slice()
-    filename = slice_["subsystem_path"]
-    removed = removed_for_subsystem(diff_text, filename)
-    findings = detect(build_decisions(slice_), removed)
-    if not findings:
-        return {"regression": False, "filename": filename}
-    by_date = sorted(findings, key=lambda f: f["date"])
+def _regression_for_file(file: str, fs: list) -> dict:
+    """Summarize one file's findings into a regression record."""
+    by_date = sorted(fs, key=lambda f: f["date"])
     origin, refinements = by_date[0], by_date[1:]
     strong, total = [], 0
-    for f in findings:
+    for f in fs:
         total += len(f["strong"])
         for l in f["strong"]:
             if l not in strong:
                 strong.append(l)
-    show = strong or [l for f in findings for l in f["matched"]]
-    conf = "HIGH" if (total >= 1 and findings[0]["score"] >= 5) else "MEDIUM"
+    show = strong or [l for f in fs for l in f["matched"]]
+    # HIGH when the change reverts a guard tied to a published advisory, or removes
+    # multiple exact guard lines; a single non-advisory line is MEDIUM.
+    has_advisory = any(f.get("ghsa") for f in fs)
+    conf = "HIGH" if (has_advisory or total >= 2) else "MEDIUM"
+    return {"file": file, "origin": _dec(origin), "refinements": [_dec(f) for f in refinements],
+            "removed": show, "confidence": conf, "matches": total}
+
+
+def scan(diff_text: str) -> dict:
+    slice_ = load_slice()
+    paths = tracked_paths(slice_)
+    findings = detect(build_decisions(slice_), removed_by_file(diff_text, paths))
+    if not findings:
+        return {"regression": False, "tracked": paths}
+    by_file = {}
+    for f in findings:
+        by_file.setdefault(f["file"], []).append(f)
+    regs = [_regression_for_file(file, fs) for file, fs in by_file.items()]
+    regs.sort(key=lambda r: r["matches"], reverse=True)
+    top = regs[0]  # most significant regression -> top-level (back-compat shape)
     return {
-        "regression": True, "filename": filename, "origin": _dec(origin),
-        "refinements": [_dec(f) for f in refinements], "removed": show,
-        "confidence": conf, "matches": total,
+        "regression": True, "filename": top["file"], "origin": top["origin"],
+        "refinements": top["refinements"], "removed": top["removed"],
+        "confidence": top["confidence"], "matches": top["matches"],
+        "regressions": regs, "tracked": paths,
     }
 
 
@@ -137,6 +153,7 @@ async def graph():
 @app.get("/api/memory")
 async def api_memory():
     slice_ = load_slice()
+    paths = tracked_paths(slice_)
     items = []
     for c in sorted(slice_["commits"], key=lambda c: c.get("date") or ""):
         sha = c["short_sha"]
@@ -145,15 +162,17 @@ async def api_memory():
         ghsa = []
         for f in c.get("files", []):
             ghsa += GHSA_RE.findall(f.get("patch") or "")
+        touches = [p for p in paths if any(match_tracked(f.get("filename"), [p]) for f in c.get("files", []))]
         items.append({
             "sha": sha, "date": (c.get("date") or "")[:10],
             "message": c["message"].splitlines()[0], "ghsa": sorted(set(ghsa)),
+            "files": touches,
             "device": "device name" in c["message"].lower(),
             "at_risk": sha in LIFECYCLE["at_risk"],
         })
     advisories = sorted({g for it in items for g in it["ghsa"]})
-    return {"repo": slice_["repo"], "subsystem": slice_["subsystem_path"],
-            "commits": len(items), "advisories": advisories, "timeline": items}
+    return {"repo": slice_["repo"], "subsystem": (paths[0] if paths else ""),
+            "tracked": paths, "commits": len(items), "advisories": advisories, "timeline": items}
 
 
 @app.get("/api/sample/{kind}")
@@ -180,7 +199,8 @@ async def api_inspect(req: InspectReq):
     the lines that years of fixes deliberately added). Pure-python, instant.
     """
     slice_ = load_slice()
-    subsystem = slice_["subsystem_path"]
+    paths = tracked_paths(slice_)
+    mp = match_tracked(req.path or "", paths)  # which tracked file is this?
     # Collect only real CODE lines present in the file: skip comments and docstring
     # prose so we never flag a doc line as a "guard" (deleting prose reverts nothing).
     present = set()
@@ -200,16 +220,22 @@ async def api_inspect(req: InspectReq):
             present.add(s)
     guards = []
     for d in build_decisions(slice_):
-        lines = [l for l in d["introduced"] if is_strong(l) and l in present]
+        # consider guard lines this decision introduced in the file under inspection;
+        # if we couldn't resolve the path, fall back to any tracked file's lines.
+        intro = set()
+        if mp:
+            intro = d.get("introduced_by_file", {}).get(mp, set())
+        else:
+            for v in d.get("introduced_by_file", {}).values():
+                intro |= v
+        lines = [l for l in intro if is_strong(l) and l in present]
         if lines:
             guards.append({"sha": d["sha"], "date": d["date"], "message": d["message"],
                            "ghsa": d["ghsa"], "lines": lines})
     guards.sort(key=lambda g: g["date"])
-    p = (req.path or "").replace("\\", "/")
-    leaf = subsystem.rsplit("/", 1)[-1]
-    path_match = bool(p) and (p == subsystem or p.endswith("/" + subsystem) or p.endswith(subsystem) or p.endswith("/" + leaf))
-    return {"subsystem": subsystem, "repo": slice_["repo"],
-            "is_subsystem": bool(guards) or path_match, "guards": guards}
+    subsystem = mp or (paths[0] if paths else "")
+    return {"subsystem": subsystem, "repo": slice_["repo"], "tracked": paths,
+            "is_subsystem": bool(guards) or bool(mp), "guards": guards}
 
 
 @app.post("/api/check_ref")
@@ -250,14 +276,16 @@ async def api_ask(req: AskReq):
 @app.post("/api/explain")
 async def api_explain(req: ScanReq):
     slice_ = load_slice()
-    filename = slice_["subsystem_path"]
-    removed = removed_for_subsystem(req.diff, filename)
-    findings = detect(build_decisions(slice_), removed)
+    paths = tracked_paths(slice_)
+    removed_map = removed_by_file(req.diff, paths)
+    findings = detect(build_decisions(slice_), removed_map)
     if not findings:
         return {"explanation": None}
-    by = sorted(findings, key=lambda f: f["date"])
+    filename = findings[0]["file"]
+    removed = removed_map.get(filename, [])
+    file_findings = sorted([f for f in findings if f["file"] == filename], key=lambda f: f["date"])
     try:
-        text = await _retry(lambda: explain_with_cognee(filename, removed, by[0], by[1:]))
+        text = await _retry(lambda: explain_with_cognee(filename, removed, file_findings[0], file_findings[1:]))
     except Exception as e:
         text = f"(error — try Rebuild memory. {e})"
     return {"explanation": text}
@@ -308,17 +336,22 @@ async def api_build():
 
 @app.post("/api/connect")
 async def api_connect(req: ConnectReq):
-    """Setup phase: point Lore at a repo+subsystem, ingest its history, build the memory."""
+    """Setup phase: point Lore at a repo + one or more files, ingest their history,
+    build the memory."""
+    paths = [p.strip() for p in (req.paths or ([req.path] if req.path else [])) if p and p.strip()]
+    if not paths:
+        return {"ok": False, "error": "Provide at least one file path to track."}
     try:
-        slice_ = fetch_slice(req.repo.strip(), req.path.strip(), (req.keyword or "").strip() or None)
+        slice_ = fetch_multi_slice(req.repo.strip(), paths, (req.keyword or "").strip() or None)
         if not slice_["commits"]:
-            return {"ok": False, "error": "No commits found for that repo/path. Check owner/repo and the file path."}
+            return {"ok": False, "error": "No commits found for that repo/path(s). Check owner/repo and the file path(s)."}
         save_slice(slice_)  # becomes the active slice
     except Exception as e:
         return {"ok": False, "error": f"ingest failed: {e}"}
     res = await _rebuild()
     if res.get("ok"):
-        res.update({"repo": slice_["repo"], "subsystem": slice_["subsystem_path"], "decisions": len(slice_["commits"])})
+        res.update({"repo": slice_["repo"], "subsystem": slice_["subsystem_path"],
+                    "tracked": slice_.get("tracked_paths", paths), "decisions": len(slice_["commits"])})
     return res
 
 

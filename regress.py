@@ -14,7 +14,7 @@ import re
 import sys
 
 from cognee import search, SearchType
-from build_graph import ingest, load_slice
+from build_graph import ingest, load_slice, tracked_paths, match_tracked
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")  # Windows console defaults to cp1252
@@ -42,7 +42,13 @@ def is_strong(line: str) -> bool:
 
 
 def added_removed(patch: str):
-    """Extract normalized, meaningful (+added, -removed) code lines from a patch/diff body."""
+    """Extract normalized, meaningful (+added, -removed) code lines from a patch.
+
+    No docstring filtering here on purpose: that's done reliably at the file level
+    in /api/inspect (which sees the whole file). A line only counts as a guard when
+    it appears in BOTH a decision's introduced set AND the file's code-only present
+    set, so any docstring prose that lands here can never match a real guard.
+    """
     added, removed = [], []
     for raw in (patch or "").splitlines():
         if raw.startswith(("+++", "---", "diff --git", "@@")):
@@ -58,14 +64,14 @@ def added_removed(patch: str):
     return added, removed
 
 
-def removed_for_subsystem(diff_text: str, subsystem_path: str):
-    """Removed, meaningful lines ONLY within hunks of the subsystem file.
+def removed_by_file(diff_text: str, paths):
+    """Removed, meaningful lines grouped by the tracked file they belong to.
 
-    Critical for accuracy: a guard regression means removing the guard FROM the
-    subsystem file — not a code *move* that deletes the lines in some other file.
+    Critical for accuracy: a guard regression means removing the guard FROM a
+    tracked file's own hunks — not a code *move* that deletes the lines elsewhere.
     """
     cur = None
-    out = []
+    out = {}
     for raw in (diff_text or "").splitlines():
         if raw.startswith("diff --git"):
             m = re.search(r" b/(\S+)", raw)
@@ -77,49 +83,68 @@ def removed_for_subsystem(diff_text: str, subsystem_path: str):
             continue
         if raw.startswith("--- ") or raw.startswith("@@"):
             continue
-        in_subsystem = bool(cur) and (cur == subsystem_path or cur.endswith("/" + subsystem_path) or cur.endswith(subsystem_path))
-        if in_subsystem and raw.startswith("-") and not raw.startswith("---"):
-            ln = raw[1:].strip()
-            if is_meaningful(ln):
-                out.append(ln)
+        if cur and raw.startswith("-") and not raw.startswith("---"):
+            mp = match_tracked(cur, paths)
+            if mp:
+                ln = raw[1:].strip()
+                if is_meaningful(ln):
+                    out.setdefault(mp, []).append(ln)
     return out
 
 
+def removed_for_subsystem(diff_text: str, subsystem_path: str):
+    """Back-compat: removed meaningful lines for a single tracked file."""
+    by = removed_by_file(diff_text, [subsystem_path])
+    mp = match_tracked(subsystem_path, [subsystem_path]) or subsystem_path
+    return by.get(mp, next(iter(by.values()), []))
+
+
 def build_decisions(slice_: dict):
-    """Each past commit becomes a Decision with the exact security.py lines it introduced."""
+    """Each past commit becomes a Decision tagged with the exact lines it introduced
+    in *each* tracked file it touched (file-keyed)."""
+    paths = tracked_paths(slice_)
     decisions = []
     for c in slice_["commits"]:
-        introduced, ghsas = set(), set()
+        introduced_by_file, ghsas = {}, set()
         for f in c.get("files", []):
             patch = f.get("patch") or ""
             ghsas.update(GHSA_RE.findall(patch))
-            if (f.get("filename") or "").endswith(SEC_FILES):
+            mp = match_tracked(f.get("filename") or "", paths)
+            if mp:
                 a, _ = added_removed(patch)
-                introduced.update(a)
+                if a:
+                    introduced_by_file.setdefault(mp, set()).update(a)
         decisions.append(
             {
                 "sha": c["short_sha"],
                 "date": (c.get("date") or "")[:10],
                 "message": (c.get("message") or "").splitlines()[0],
                 "ghsa": sorted(ghsas),
-                "introduced": introduced,
+                "introduced_by_file": introduced_by_file,
+                "files": sorted(introduced_by_file.keys()),
             }
         )
     return decisions
 
 
-def detect(decisions, removed_lines):
-    """Rank decisions whose introduced guard lines the change removes."""
+def detect(decisions, removed_map):
+    """Rank decisions whose introduced guard lines a change removes, per file.
+
+    `removed_map` is {tracked_path: [removed lines]} (from removed_by_file). Each
+    finding records the file it concerns.
+    """
     findings = []
-    token_removed = any("_windows_device_files" in l for l in removed_lines)
-    for d in decisions:
-        matched = [l for l in removed_lines if l in d["introduced"]]
-        if not matched:
-            continue  # require a real line overlap => low false-positive rate
-        strong = [l for l in matched if is_strong(l)]
-        d_has_token = any("_windows_device_files" in l for l in d["introduced"])
-        score = len(strong) * 2 + len(matched) + (3 if (token_removed and d_has_token) else 0)
-        findings.append({**d, "matched": matched, "strong": strong, "score": score})
+    for path, removed_lines in removed_map.items():
+        for d in decisions:
+            intro = d.get("introduced_by_file", {}).get(path)
+            if not intro:
+                continue
+            matched = [l for l in removed_lines if l in intro]
+            if not matched:
+                continue  # require a real line overlap => low false-positive rate
+            strong = [l for l in matched if is_strong(l)]
+            score = len(strong) * 2 + len(matched)
+            findings.append({**d, "file": path, "matched": matched, "strong": strong, "score": score})
     findings.sort(key=lambda f: f["score"], reverse=True)
     return findings
 
@@ -175,7 +200,7 @@ async def explain_with_cognee(filename, removed_lines, origin, refinements) -> s
         "FACTS (use ONLY these; do not introduce other commits):\n"
         f"- Guard introduced by commit {origin['sha']} on {origin['date']}: "
         f"\"{origin['message']}\" (advisory {ghsa}).\n"
-        f"- It added a Windows special device-name check to safe_join in {filename}.\n"
+        f"- It added guard logic to {filename} that the proposed change removes.\n"
         f"- Later hardened by: {later}.\n"
         f"- The proposed change removes these guard lines:\n{removed_str}\n"
     )
@@ -193,20 +218,23 @@ async def main():
     with open(diff_path, encoding="utf-8") as f:
         diff_text = f.read()
     slice_ = load_slice()
-    filename = slice_["subsystem_path"]
-    removed_lines = removed_for_subsystem(diff_text, filename)
-    findings = detect(build_decisions(slice_), removed_lines)
+    paths = tracked_paths(slice_)
+    removed_map = removed_by_file(diff_text, paths)
+    findings = detect(build_decisions(slice_), removed_map)
 
     # --- Layer A: deterministic, guaranteed, accurate ---
-    print(render_alert(filename, removed_lines, findings))
+    filename = findings[0]["file"] if findings else (paths[0] if paths else "?")
+    removed_lines = removed_map.get(filename, [])
+    file_findings = [f for f in findings if f["file"] == filename]
+    print(render_alert(filename, removed_lines, file_findings))
 
-    if not findings:
+    if not file_findings:
         return
 
     # --- Layer B: grounded Cognee explanation over the real graph ---
     print("\nBuilding graph + asking Cognee to corroborate (grounded)...\n")
     await ingest(prune=True)
-    by_date = sorted(findings, key=lambda f: f["date"])
+    by_date = sorted(file_findings, key=lambda f: f["date"])
     origin, refinements = by_date[0], by_date[1:]
     explanation = await explain_with_cognee(filename, removed_lines, origin, refinements)
     print("[Cognee explanation]")

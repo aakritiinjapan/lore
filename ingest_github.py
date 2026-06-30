@@ -71,7 +71,7 @@ def _build_record(repo, c):
                 "status": f.get("status"),
                 "additions": f.get("additions"),
                 "deletions": f.get("deletions"),
-                "patch": (f.get("patch") or "")[:1500],
+                "patch": (f.get("patch") or "")[:8000],
             }
         )
     msg = cm.get("message", "")
@@ -91,6 +91,8 @@ def fetch_slice(repo: str, path: str, keyword: str | None = None, limit: int = 8
     """Build a scoped slice: the commits touching `path` (optionally filtered by a
     keyword over commit messages). Works for any public repo."""
     commits = fetch_commits_for_path(repo, path)
+    # merge commits don't introduce decisions of their own — they just fold a PR in
+    commits = [c for c in commits if not (c.get("commit") or {}).get("message", "").startswith(("Merge pull request", "Merge branch"))]
     if keyword:
         rx = re.compile(keyword, re.IGNORECASE)
         selected = [c for c in commits if rx.search((c.get("commit") or {}).get("message", ""))]
@@ -103,6 +105,26 @@ def fetch_slice(repo: str, path: str, keyword: str | None = None, limit: int = 8
         "repo": repo,
         "subsystem_path": path,
         "commits": [_build_record(repo, c) for c in selected],
+    }
+
+
+def fetch_multi_slice(repo: str, paths, keyword: str | None = None, limit: int = 8) -> dict:
+    """Track multiple files at once: union of the commits touching any of `paths`,
+    deduped by sha. Each commit record already carries every file it changed, so the
+    engine can index introduced lines per file. This is the same shape a whole-repo
+    ingest produces — just with a broader path set."""
+    paths = [p for p in (paths or []) if p]
+    by_sha = {}
+    for p in paths:
+        s = fetch_slice(repo, p, keyword, limit)
+        for c in s.get("commits", []):
+            by_sha[c["sha"]] = c
+    commits = sorted(by_sha.values(), key=lambda c: c.get("date") or "")
+    return {
+        "repo": repo,
+        "subsystem_path": paths[0] if paths else "",
+        "tracked_paths": list(paths),
+        "commits": commits,
     }
 
 

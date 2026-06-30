@@ -22,17 +22,19 @@ async def main():
         ans = res[0] if isinstance(res, list) and res else (str(res) if res else "No answer found.")
         out = {"answer": ans}
     elif mode == "explain":
-        from build_graph import load_slice
-        from regress import build_decisions, detect, removed_for_subsystem, explain_with_cognee
+        from build_graph import load_slice, tracked_paths
+        from regress import build_decisions, detect, removed_by_file, explain_with_cognee
 
         slice_ = load_slice()
-        fn = slice_["subsystem_path"]
-        removed = removed_for_subsystem(req["diff"], fn)
-        findings = detect(build_decisions(slice_), removed)
+        paths = tracked_paths(slice_)
+        removed_map = removed_by_file(req["diff"], paths)
+        findings = detect(build_decisions(slice_), removed_map)
         if not findings:
             out = {"explanation": None}
         else:
-            by = sorted(findings, key=lambda f: f["date"])
+            fn = findings[0]["file"]
+            removed = removed_map.get(fn, [])
+            by = sorted([f for f in findings if f["file"] == fn], key=lambda f: f["date"])
             out = {"explanation": await explain_with_cognee(fn, removed, by[0], by[1:])}
     else:
         out = {"error": "unknown mode"}
